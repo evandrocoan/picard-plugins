@@ -20,12 +20,11 @@
 PLUGIN_NAME = 'fanart.tv cover art'
 PLUGIN_AUTHOR = 'Philipp Wolfer, Sambhav Kothari'
 PLUGIN_DESCRIPTION = 'Use cover art from fanart.tv. To use this plugin you have to register a personal API key on https://fanart.tv/get-an-api-key/'
-PLUGIN_VERSION = "1.1"
+PLUGIN_VERSION = "1.5"
 PLUGIN_API_VERSIONS = ["2.0"]
-PLUGIN_LICENSE = "GPL-2.0"
+PLUGIN_LICENSE = "GPL-2.0-or-later"
 PLUGIN_LICENSE_URL = "https://www.gnu.org/licenses/gpl-2.0.html"
 
-import traceback
 from functools import partial
 from PyQt5.QtCore import QUrl
 from PyQt5.QtNetwork import QNetworkReply
@@ -33,7 +32,6 @@ from picard import config, log
 from picard.coverart.providers import CoverArtProvider, register_cover_art_provider
 from picard.coverart.image import CoverArtImage
 from picard.ui.options import register_options_page, OptionsPage
-from picard.util import load_json
 from picard.config import TextOption
 from picard.plugins.fanarttv.ui_options_fanarttv import Ui_FanartTvOptionsPage
 
@@ -73,21 +71,22 @@ class CoverArtProviderFanartTv(CoverArtProvider):
             super(CoverArtProviderFanartTv, self).enabled() and \
             not self.coverart.front_image_found
 
-    def queue_downloads(self):
+    def queue_images(self):
         release_group_id = self.metadata["musicbrainz_releasegroupid"]
-        path = "/v3/music/albums/%s" % \
-            (release_group_id, )
-        queryargs = {"api_key": QUrl.toPercentEncoding(FANART_APIKEY),
-                     "client_key": QUrl.toPercentEncoding(self._client_key),
-                     }
+        path = "/v3/music/albums/%s" % (release_group_id, )
+        queryargs = {
+            "api_key": bytes(QUrl.toPercentEncoding(FANART_APIKEY)).decode(),
+            "client_key": bytes(QUrl.toPercentEncoding(self._client_key)).decode(),
+        }
         log.debug("CoverArtProviderFanartTv.queue_downloads: %s" % path)
-        self.album.tagger.webservice.download(
+        self.album.tagger.webservice.get(
             FANART_HOST,
             FANART_PORT,
             path,
             partial(self._json_downloaded, release_group_id),
             priority=True,
             important=False,
+            parse_response_type='json',
             queryargs=queryargs)
         self.album._requests += 1
         return CoverArtProvider.WAIT
@@ -107,8 +106,7 @@ class CoverArtProviderFanartTv(CoverArtProvider):
             error_level("Problem requesting metadata in fanart.tv plugin: %s", error)
         else:
             try:
-                response = load_json(data)
-                release = response["albums"][release_group_id]
+                release = data["albums"][release_group_id]
 
                 if "albumcover" in release:
                     covers = release["albumcover"]
@@ -124,8 +122,8 @@ class CoverArtProviderFanartTv(CoverArtProvider):
                     if not "albumcover" in release:
                         types.append("front")
                     self._select_and_add_cover_art(covers, types)
-            except:
-                log.error("Problem processing downloaded metadata in fanart.tv plugin: %s", traceback.format_exc())
+            except (AttributeError, KeyError, TypeError):
+                log.error("Problem processing downloaded metadata in fanart.tv plugin: %s", exc_info=True)
 
         self.next_in_queue()
 
@@ -162,7 +160,7 @@ class FanartTvOptionsPage(OptionsPage):
             self.ui.fanarttv_cdart_use_if_no_albumcover.setChecked(True)
 
     def save(self):
-        config.setting["fanarttv_client_key"] = string_(self.ui.fanarttv_client_key.text())
+        config.setting["fanarttv_client_key"] = self.ui.fanarttv_client_key.text()
         if self.ui.fanarttv_cdart_use_always.isChecked():
             config.setting["fanarttv_use_cdart"] = OPTION_CDART_ALWAYS
         elif self.ui.fanarttv_cdart_use_never.isChecked():
